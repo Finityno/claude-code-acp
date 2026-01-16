@@ -396,6 +396,9 @@ export class ClaudeAcpAgent implements Agent {
                 message.message.content.filter((item) => !["text", "thinking"].includes(item.type))
               : message.message.content;
 
+          // Pass through the SDK-provided parent_tool_use_id which identifies the subagent context
+          const sdkParentToolUseId = message.parent_tool_use_id;
+
           for (const notification of toAcpNotifications(
             content,
             message.message.role,
@@ -404,6 +407,7 @@ export class ClaudeAcpAgent implements Agent {
             this.client,
             this.logger,
             this.subagentTracker,
+            sdkParentToolUseId,
           )) {
             await this.client.sessionUpdate(notification);
           }
@@ -1028,6 +1032,8 @@ export function toAcpNotifications(
   client: AgentSideConnection,
   logger: Logger,
   subagentTracker?: SubagentTracker,
+  /** The parent tool use ID from the SDK message - indicates which subagent context this is from */
+  sdkParentToolUseId?: string | null,
 ): SessionNotification[] {
   if (typeof content === "string") {
     return [
@@ -1094,8 +1100,10 @@ export function toAcpNotifications(
           }
         } else if (chunk.name === "Task" && subagentTracker && isTaskToolInput(chunk.input)) {
           // Track Task tool as subagent
+          // Pass the SDK-provided parent_tool_use_id for proper nesting of subagents
           const input = chunk.input as TaskToolInput;
-          subagentTracker.trackSubagent(chunk.id, sessionId, input);
+          const parentSubagentId = sdkParentToolUseId ?? undefined;
+          subagentTracker.trackSubagent(chunk.id, sessionId, input, parentSubagentId);
 
           // Register hook callback for subagent completion
           registerHookCallback(chunk.id, {
@@ -1178,9 +1186,11 @@ export function toAcpNotifications(
             ...toolInfoFromToolUse(chunk),
           };
         } else {
-          // Capture the active subagent at tool call time for use in the callback
-          const activeSubagentAtCallTime = subagentTracker?.getActiveSubagent(sessionId);
-          const capturedParentId = activeSubagentAtCallTime?.id;
+          // Use the SDK-provided parent tool use ID which correctly identifies
+          // which subagent context this tool call is from.
+          // Task tools are subagents themselves, not children of other subagents.
+          const isTaskTool = chunk.name === "Task";
+          const parentToolUseId = isTaskTool ? undefined : (sdkParentToolUseId ?? undefined);
 
           // Register hook callback to receive the structured output from the hook
           registerHookCallback(chunk.id, {
@@ -1192,7 +1202,7 @@ export function toAcpNotifications(
                     claudeCode: {
                       toolResponse,
                       toolName: toolUse.name,
-                      ...(capturedParentId && { parentToolUseId: capturedParentId }),
+                      ...(parentToolUseId && { parentToolUseId }),
                     },
                   } satisfies ToolUpdateMeta,
                   toolCallId: toolUseId,
@@ -1216,10 +1226,6 @@ export function toAcpNotifications(
           } catch {
             // ignore if we can't turn it to JSON
           }
-
-          // Check if there's an active subagent that owns this tool call
-          const activeSubagent = subagentTracker?.getActiveSubagent(sessionId);
-          const parentToolUseId = activeSubagent?.id;
 
           update = {
             _meta: {
@@ -1255,9 +1261,11 @@ export function toAcpNotifications(
         }
 
         if (toolUse.name !== "TodoWrite") {
-          // Check if there's an active subagent that owns this tool call
-          const activeSubagent = subagentTracker?.getActiveSubagent(sessionId);
-          const parentToolUseId = activeSubagent?.id;
+          // Use the SDK-provided parent tool use ID which correctly identifies
+          // which subagent context this tool result is from.
+          // Task tools are subagents themselves, not children of other subagents.
+          const isTaskTool = toolUse.name === "Task";
+          const parentToolUseId = isTaskTool ? undefined : (sdkParentToolUseId ?? undefined);
 
           update = {
             _meta: {
@@ -1305,6 +1313,9 @@ export function streamEventToAcpNotifications(
   subagentTracker?: SubagentTracker,
 ): SessionNotification[] {
   const event = message.event;
+  // Pass through the SDK-provided parent_tool_use_id which identifies the subagent context
+  const sdkParentToolUseId = message.parent_tool_use_id;
+
   switch (event.type) {
     case "content_block_start":
       return toAcpNotifications(
@@ -1315,6 +1326,7 @@ export function streamEventToAcpNotifications(
         client,
         logger,
         subagentTracker,
+        sdkParentToolUseId,
       );
     case "content_block_delta":
       return toAcpNotifications(
@@ -1325,6 +1337,7 @@ export function streamEventToAcpNotifications(
         client,
         logger,
         subagentTracker,
+        sdkParentToolUseId,
       );
     // No content
     case "message_start":
