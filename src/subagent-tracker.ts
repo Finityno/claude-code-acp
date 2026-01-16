@@ -316,6 +316,29 @@ export class SubagentTracker {
   }
 
   /**
+   * Get running subagents for a specific session, sorted by start time (most recent first)
+   */
+  getRunningSubagentsForSession(sessionId: string): TrackedSubagent[] {
+    const sessionIds = this.sessionSubagents.get(sessionId);
+    if (!sessionIds) return [];
+
+    return Array.from(sessionIds)
+      .map((id) => this.subagents.get(id))
+      .filter((s): s is TrackedSubagent => s !== undefined && s.status === "running")
+      .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0)); // Most recent first
+  }
+
+  /**
+   * Get the most recently started running subagent for a session.
+   * This is used to associate tool calls with their parent subagent.
+   * Returns undefined if no subagent is currently running.
+   */
+  getActiveSubagent(sessionId: string): TrackedSubagent | undefined {
+    const running = this.getRunningSubagentsForSession(sessionId);
+    return running.length > 0 ? running[0] : undefined;
+  }
+
+  /**
    * Get all subagents (for debugging/monitoring)
    */
   getAllSubagents(): TrackedSubagent[] {

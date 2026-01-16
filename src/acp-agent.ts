@@ -127,6 +127,8 @@ export type ToolUpdateMeta = {
     toolName: string;
     /* The structured output provided by Claude Code. */
     toolResponse?: unknown;
+    /* Parent tool use ID if this tool was called by a subagent */
+    parentToolUseId?: string;
   };
 };
 
@@ -1176,6 +1178,10 @@ export function toAcpNotifications(
             ...toolInfoFromToolUse(chunk),
           };
         } else {
+          // Capture the active subagent at tool call time for use in the callback
+          const activeSubagentAtCallTime = subagentTracker?.getActiveSubagent(sessionId);
+          const capturedParentId = activeSubagentAtCallTime?.id;
+
           // Register hook callback to receive the structured output from the hook
           registerHookCallback(chunk.id, {
             onPostToolUseHook: async (toolUseId, toolInput, toolResponse) => {
@@ -1186,6 +1192,7 @@ export function toAcpNotifications(
                     claudeCode: {
                       toolResponse,
                       toolName: toolUse.name,
+                      ...(capturedParentId && { parentToolUseId: capturedParentId }),
                     },
                   } satisfies ToolUpdateMeta,
                   toolCallId: toolUseId,
@@ -1209,10 +1216,16 @@ export function toAcpNotifications(
           } catch {
             // ignore if we can't turn it to JSON
           }
+
+          // Check if there's an active subagent that owns this tool call
+          const activeSubagent = subagentTracker?.getActiveSubagent(sessionId);
+          const parentToolUseId = activeSubagent?.id;
+
           update = {
             _meta: {
               claudeCode: {
                 toolName: chunk.name,
+                ...(parentToolUseId && { parentToolUseId }),
               },
             } satisfies ToolUpdateMeta,
             toolCallId: chunk.id,
@@ -1242,10 +1255,15 @@ export function toAcpNotifications(
         }
 
         if (toolUse.name !== "TodoWrite") {
+          // Check if there's an active subagent that owns this tool call
+          const activeSubagent = subagentTracker?.getActiveSubagent(sessionId);
+          const parentToolUseId = activeSubagent?.id;
+
           update = {
             _meta: {
               claudeCode: {
                 toolName: toolUse.name,
+                ...(parentToolUseId && { parentToolUseId }),
               },
             } satisfies ToolUpdateMeta,
             toolCallId: chunk.tool_use_id,
