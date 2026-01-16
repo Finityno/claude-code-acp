@@ -1,9 +1,9 @@
 {
-  "name": "@zed-industries/claude-code-acp",
+  "name": "@finityno/claude-code-acp",
   "publishConfig": {
     "access": "public"
   },
-  "version": "0.13.1",
+  "version": "0.13.3",
   "description": "An ACP-compatible coding agent powered by the Claude Code SDK (TypeScript)",
   "main": "dist/lib.js",
   "types": "dist/lib.d.ts",
@@ -49,15 +49,15 @@
     "sdk",
     "code"
   ],
-  "homepage": "https://github.com/zed-industries/claude-code-acp#readme",
+  "homepage": "https://github.com/Finityno/claude-code-acp#readme",
   "bugs": {
-    "url": "https://github.com/zed-industries/claude-code-acp/issues"
+    "url": "https://github.com/Finityno/claude-code-acp/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zed-industries/claude-code-acp.git"
+    "url": "git+https://github.com/Finityno/claude-code-acp.git"
   },
-  "author": "Zed Industries",
+  "author": "Finityno",
   "license": "Apache-2.0",
   "dependencies": {
     "@agentclientprotocol/sdk": "0.13.0",
