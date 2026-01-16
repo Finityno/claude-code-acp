@@ -1,10 +1,28 @@
 # ACP adapter for Claude Code
 
-[![npm](https://img.shields.io/npm/v/%40zed-industries%2Fclaude-code-acp)](https://www.npmjs.com/package/@zed-industries/claude-code-acp)
+[![npm](https://img.shields.io/npm/v/%40finityno%2Fclaude-code-acp)](https://www.npmjs.com/package/@finityno/claude-code-acp)
+
+> **Fork of [@zed-industries/claude-code-acp](https://github.com/zed-industries/claude-code-acp)**
+>
+> This fork adds support for **subagent (Task tool) tracking** and will soon include **AskUserQuestion tool** support.
 
 Use [Claude Code](https://www.anthropic.com/claude-code) from [ACP-compatible](https://agentclientprotocol.com) clients such as [Zed](https://zed.dev)!
 
-This tool implements an ACP agent by using the official [Claude Agent SDK](https://platform.claude.com/docs/en/agent-sdk/overview), supporting:
+## Installation
+
+```bash
+npm i @finityno/claude-code-acp
+```
+
+Or install globally:
+
+```bash
+npm i -g @finityno/claude-code-acp
+```
+
+## Features
+
+This adapter implements an ACP agent using the official [Claude Agent SDK](https://platform.claude.com/docs/en/agent-sdk/overview):
 
 - Context @-mentions
 - Images
@@ -15,36 +33,52 @@ This tool implements an ACP agent by using the official [Claude Agent SDK](https
 - Interactive (and background) terminals
 - Custom [Slash commands](https://docs.anthropic.com/en/docs/claude-code/slash-commands)
 - Client MCP servers
+- **Subagent tracking** (Task tool lifecycle events)
 
-Learn more about the [Agent Client Protocol](https://agentclientprotocol.com/).
+## Subagent Tracking
 
-## How to use
+Track Task tool (subagent) lifecycle events:
 
-### Zed
+```typescript
+import { ClaudeAcpAgent } from "@finityno/claude-code-acp";
 
-The latest version of Zed can already use this adapter out of the box.
+const agent = new ClaudeAcpAgent(client);
+const tracker = agent.subagentTracker;
 
-To use Claude Code, open the Agent Panel and click "New Claude Code Thread" from the `+` button menu in the top-right:
+// Listen for subagent events
+tracker.addEventListener("subagent_started", (subagent) => {
+  console.log(`Started: ${subagent.description} (${subagent.subagentType})`);
+});
 
-https://github.com/user-attachments/assets/ddce66c7-79ac-47a3-ad59-4a6a3ca74903
+tracker.addEventListener("subagent_completed", (subagent) => {
+  console.log(`Completed: ${subagent.id}`);
+});
+
+tracker.addEventListener("subagent_failed", (subagent) => {
+  console.error(`Failed: ${subagent.error}`);
+});
+
+// Query subagents
+tracker.getRunningSubagents();          // Currently active
+tracker.getSessionSubagents(sessionId); // By session
+tracker.getStats();                     // Counts & avg duration
+```
+
+See [docs/subagent-tracking.md](docs/subagent-tracking.md) for full API documentation.
+
+## Usage
+
+### With Zed
+
+The latest version of Zed can use this adapter out of the box. Open the Agent Panel and click "New Claude Code Thread" from the `+` button menu.
 
 Read the docs on [External Agent](https://zed.dev/docs/ai/external-agents) support.
 
-### Other clients
+### Other Clients
 
-Or try it with any of the other [ACP compatible clients](https://agentclientprotocol.com/overview/clients)!
-
-#### Installation
-
-Install the adapter from `npm`:
+Use with any [ACP compatible client](https://agentclientprotocol.com/overview/clients):
 
 ```bash
-npm install -g @zed-industries/claude-code-acp
-```
-
-You can then use `claude-code-acp` as a regular ACP agent:
-
-```
 ANTHROPIC_API_KEY=sk-... claude-code-acp
 ```
 
