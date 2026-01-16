@@ -50,9 +50,68 @@ interface ToolUpdate {
   locations?: ToolCallLocation[];
 }
 
+/**
+ * Normalize a tool name by stripping MCP prefixes.
+ * e.g., "mcp__acp__Read" -> "Read", "mcp__context7__query-docs" -> "query-docs"
+ */
+export function normalizeToolName(name: string): string {
+  // Strip mcp__<server>__ prefix
+  const mcpMatch = name.match(/^mcp__[^_]+__(.+)$/);
+  if (mcpMatch) {
+    return mcpMatch[1];
+  }
+  return name;
+}
+
+/**
+ * Get the canonical tool name for categorization purposes.
+ * This maps tool names to their canonical form for icon/kind matching.
+ */
+export function getCanonicalToolName(name: string): string {
+  const normalized = normalizeToolName(name);
+
+  // Map common variations to canonical names
+  const canonicalMap: Record<string, string> = {
+    // ACP tools
+    "Read": "Read",
+    "Edit": "Edit",
+    "Write": "Write",
+    "Bash": "Bash",
+    "BashOutput": "BashOutput",
+    "KillShell": "KillShell",
+    "TaskOutput": "TaskOutput",
+
+    // Search tools
+    "Glob": "Glob",
+    "Grep": "Grep",
+    "LS": "LS",
+
+    // Web tools
+    "WebFetch": "WebFetch",
+    "WebSearch": "WebSearch",
+
+    // Agent/planning tools
+    "Task": "Task",
+    "TodoWrite": "TodoWrite",
+    "ExitPlanMode": "ExitPlanMode",
+    "EnterPlanMode": "EnterPlanMode",
+    "AskUserQuestion": "AskUserQuestion",
+    "Skill": "Skill",
+
+    // Notebook tools
+    "NotebookRead": "NotebookRead",
+    "NotebookEdit": "NotebookEdit",
+  };
+
+  return canonicalMap[normalized] ?? normalized;
+}
+
 export function toolInfoFromToolUse(toolUse: any): ToolInfo {
-  const name = toolUse.name;
+  const rawName = toolUse.name;
   const input = toolUse.input;
+
+  // Get canonical name for matching
+  const name = getCanonicalToolName(rawName);
 
   switch (name) {
     case "Task":
@@ -95,7 +154,6 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
       };
 
     case "Bash":
-    case acpToolNames.bash:
       return {
         title: input?.command ? "`" + input.command.replaceAll("`", "\\`") + "`" : "Terminal",
         kind: "execute",
@@ -111,7 +169,6 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
       };
 
     case "BashOutput":
-    case acpToolNames.bashOutput:
       return {
         title: "Tail Logs",
         kind: "execute",
@@ -119,25 +176,31 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
       };
 
     case "KillShell":
-    case acpToolNames.killShell:
       return {
         title: "Kill Process",
         kind: "execute",
         content: [],
       };
 
-    case acpToolNames.read: {
+    case "TaskOutput":
+      return {
+        title: input?.task_id ? `Task Output (${input.task_id})` : "Task Output",
+        kind: "read",
+        content: [],
+      };
+
+    case "Read": {
       let limit = "";
-      if (input.limit) {
+      if (input?.limit) {
         limit =
           " (" + ((input.offset ?? 0) + 1) + " - " + ((input.offset ?? 0) + input.limit) + ")";
-      } else if (input.offset) {
+      } else if (input?.offset) {
         limit = " (from line " + (input.offset + 1) + ")";
       }
       return {
-        title: "Read " + (input.file_path ?? "File") + limit,
+        title: "Read " + (input?.file_path ?? "File") + limit,
         kind: "read",
-        locations: input.file_path
+        locations: input?.file_path
           ? [
               {
                 path: input.file_path,
@@ -149,21 +212,6 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
       };
     }
 
-    case "Read":
-      return {
-        title: "Read File",
-        kind: "read",
-        content: [],
-        locations: input.file_path
-          ? [
-              {
-                path: input.file_path,
-                line: input.offset ?? 0,
-              },
-            ]
-          : [],
-      };
-
     case "LS":
       return {
         title: `List the ${input?.path ? "`" + input.path + "`" : "current"} directory's contents`,
@@ -172,9 +220,8 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
         locations: [],
       };
 
-    case acpToolNames.edit:
     case "Edit": {
-      const path = input?.file_path ?? input?.file_path;
+      const path = input?.file_path;
 
       return {
         title: path ? `Edit \`${path}\`` : "Edit",
@@ -194,7 +241,7 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
       };
     }
 
-    case acpToolNames.write: {
+    case "Write": {
       let content: ToolCallContent[] = [];
       if (input && input.file_path) {
         content = [
@@ -220,24 +267,6 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
         locations: input?.file_path ? [{ path: input.file_path }] : [],
       };
     }
-
-    case "Write":
-      return {
-        title: input?.file_path ? `Write ${input.file_path}` : "Write",
-        kind: "edit",
-        content:
-          input && input.file_path
-            ? [
-                {
-                  type: "diff",
-                  path: input.file_path,
-                  oldText: null,
-                  newText: input.content,
-                },
-              ]
-            : [],
-        locations: input?.file_path ? [{ path: input.file_path }] : [],
-      };
 
     case "Glob": {
       let label = "Find";
@@ -372,6 +401,39 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
             : [],
       };
 
+    case "AskUserQuestion":
+      return {
+        title: "Question",
+        kind: "think",
+        content: input?.questions
+          ? [
+              {
+                type: "content",
+                content: {
+                  type: "text",
+                  text: Array.isArray(input.questions)
+                    ? input.questions.map((q: any) => q.question).join("\n")
+                    : String(input.questions),
+                },
+              },
+            ]
+          : [],
+      };
+
+    case "EnterPlanMode":
+      return {
+        title: "Enter Plan Mode",
+        kind: "switch_mode",
+        content: [],
+      };
+
+    case "Skill":
+      return {
+        title: input?.skill ? `/${input.skill}` : "Skill",
+        kind: "execute",
+        content: [],
+      };
+
     case "Other": {
       let output;
       try {
@@ -380,7 +442,7 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
         output = typeof input === "string" ? input : "{}";
       }
       return {
-        title: name || "Unknown Tool",
+        title: rawName || "Unknown Tool",
         kind: "other",
         content: [
           {
@@ -394,12 +456,23 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
       };
     }
 
-    default:
+    default: {
+      // For MCP tools from other servers, try to provide a reasonable title
+      const isMcpTool = rawName.startsWith("mcp__");
+      let title = rawName;
+      if (isMcpTool) {
+        // Extract server and tool name: mcp__server__toolName -> server: toolName
+        const parts = rawName.match(/^mcp__([^_]+)__(.+)$/);
+        if (parts) {
+          title = `${parts[1]}: ${parts[2]}`;
+        }
+      }
       return {
-        title: name || "Unknown Tool",
-        kind: "other",
+        title: title || "Unknown Tool",
+        kind: isMcpTool ? "other" : "other",
         content: [],
       };
+    }
   }
 }
 
@@ -426,9 +499,11 @@ export function toolUpdateFromToolResult(
     return toAcpContentUpdate(toolResult.content, true);
   }
 
-  switch (toolUse?.name) {
+  // Use canonical name for matching
+  const canonicalName = toolUse?.name ? getCanonicalToolName(toolUse.name) : undefined;
+
+  switch (canonicalName) {
     case "Read":
-    case acpToolNames.read:
       if (Array.isArray(toolResult.content) && toolResult.content.length > 0) {
         return {
           content: toolResult.content.map((content: any) => ({
@@ -457,7 +532,7 @@ export function toolUpdateFromToolResult(
       }
       return {};
 
-    case acpToolNames.edit: {
+    case "Edit": {
       const content: ToolCallContent[] = [];
       const locations: ToolCallLocation[] = [];
 
@@ -506,10 +581,7 @@ export function toolUpdateFromToolResult(
       return result;
     }
 
-    case acpToolNames.bash:
-    case "edit":
-    case "Edit":
-    case acpToolNames.write:
+    case "Bash":
     case "Write": {
       return {};
     }
@@ -518,20 +590,7 @@ export function toolUpdateFromToolResult(
       return { title: "Exited Plan Mode" };
     }
 
-    case "Task":
-    case "NotebookEdit":
-    case "NotebookRead":
-    case "TodoWrite":
-    case "exit_plan_mode":
-    case "Bash":
-    case "BashOutput":
-    case "KillBash":
-    case "LS":
-    case "Glob":
-    case "Grep":
-    case "WebFetch":
-    case "WebSearch":
-    case "Other":
+    // All other tools: return content as-is
     default: {
       return toAcpContentUpdate(
         toolResult.content,

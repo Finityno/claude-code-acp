@@ -1163,10 +1163,13 @@ export function toAcpNotifications(
           }
 
           // Send tool_call notification with subagent metadata
+          // Include parentToolUseId for nested subagents (Task called from within another Task)
           update = {
             _meta: {
               claudeCode: {
                 toolName: chunk.name,
+                // For nested subagents, include parent reference
+                ...(parentSubagentId && { parentToolUseId: parentSubagentId }),
                 subagent: {
                   id: chunk.id,
                   eventType: "subagent_started",
@@ -1174,6 +1177,8 @@ export function toAcpNotifications(
                   description: input.description,
                   status: "running",
                   parentSessionId: sessionId,
+                  // Include parent for nested subagents
+                  ...(parentSubagentId && { parentToolUseId: parentSubagentId }),
                   model: input.model,
                   runInBackground: input.run_in_background ?? false,
                 },

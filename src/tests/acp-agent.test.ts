@@ -411,7 +411,7 @@ describe("tool conversions", () => {
 
     expect(toolInfoFromToolUse(tool_use)).toStrictEqual({
       kind: "read",
-      title: "Read File",
+      title: "Read /Users/test/project/readme.md",
       content: [],
       locations: [{ path: "/Users/test/project/readme.md", line: 0 }],
     });

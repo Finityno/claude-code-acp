@@ -22,6 +22,8 @@ export {
   toolUpdateFromToolResult,
   createPreToolUseHook,
   acpToolNames as toolNames,
+  normalizeToolName,
+  getCanonicalToolName,
 } from "./tools.js";
 export {
   SettingsManager,
