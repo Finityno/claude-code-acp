@@ -104,16 +104,23 @@ Task tools automatically include subagent metadata in `tool_call` notifications:
 Use without ACP client for custom integrations:
 
 ```typescript
-import { SubagentTracker } from "@finityno/claude-code-acp";
+import { SubagentTracker, TaskToolInput } from "@finityno/claude-code-acp";
 
 const tracker = new SubagentTracker(null, console);
 
-tracker.trackSubagent("id", "session", {
+// TaskToolInput uses snake_case (matches Claude's JSON format)
+const input: TaskToolInput = {
   description: "My task",
   prompt: "Do something",
   subagent_type: "custom"
-});
+};
+
+tracker.trackSubagent("id", "session", input);
 
 await tracker.startSubagent("id");
 await tracker.completeSubagent("id", { result: "done" });
+
+// TrackedSubagent uses camelCase
+const subagent = tracker.getSubagent("id");
+console.log(subagent.subagentType); // "custom"
 ```
