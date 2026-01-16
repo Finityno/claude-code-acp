@@ -32,5 +32,20 @@ export {
   type SettingsManagerOptions,
 } from "./settings.js";
 
+// Export subagent tracking
+export {
+  SubagentTracker,
+  isTaskToolInput,
+  extractSubagentMeta,
+  type TrackedSubagent,
+  type SubagentStatus,
+  type SubagentType,
+  type SubagentEventType,
+  type SubagentUpdateMeta,
+  type SubagentEventListener,
+  type SubagentStats,
+  type TaskToolInput,
+} from "./subagent-tracker.js";
+
 // Export types
 export type { ClaudePlanEntry } from "./tools.js";

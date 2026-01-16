@@ -56,6 +56,12 @@ import {
   createPostToolUseHook,
   createPreToolUseHook,
 } from "./tools.js";
+import {
+  SubagentTracker,
+  TaskToolInput,
+  SubagentUpdateMeta,
+  isTaskToolInput,
+} from "./subagent-tracker.js";
 import { ContentBlockParam } from "@anthropic-ai/sdk/resources";
 import { BetaContentBlock, BetaRawContentBlockDelta } from "@anthropic-ai/sdk/resources/beta.mjs";
 import packageJson from "../package.json" with { type: "json" };
@@ -146,12 +152,14 @@ export class ClaudeAcpAgent implements Agent {
   backgroundTerminals: { [key: string]: BackgroundTerminal } = {};
   clientCapabilities?: ClientCapabilities;
   logger: Logger;
+  subagentTracker: SubagentTracker;
 
   constructor(client: AgentSideConnection, logger?: Logger) {
     this.sessions = {};
     this.client = client;
     this.toolUseCache = {};
     this.logger = logger ?? console;
+    this.subagentTracker = new SubagentTracker(client, this.logger);
   }
 
   async initialize(request: InitializeRequest): Promise<InitializeResponse> {
@@ -329,6 +337,7 @@ export class ClaudeAcpAgent implements Agent {
             this.toolUseCache,
             this.client,
             this.logger,
+            this.subagentTracker,
           )) {
             await this.client.sessionUpdate(notification);
           }
@@ -392,6 +401,7 @@ export class ClaudeAcpAgent implements Agent {
             this.toolUseCache,
             this.client,
             this.logger,
+            this.subagentTracker,
           )) {
             await this.client.sessionUpdate(notification);
           }
@@ -414,6 +424,15 @@ export class ClaudeAcpAgent implements Agent {
       throw new Error("Session not found");
     }
     this.sessions[params.sessionId].cancelled = true;
+
+    // Cancel any running subagents for this session
+    const runningSubagents = this.subagentTracker
+      .getSessionSubagents(params.sessionId)
+      .filter((s) => s.status === "running" || s.status === "pending");
+    for (const subagent of runningSubagents) {
+      await this.subagentTracker.cancelSubagent(subagent.id);
+    }
+
     await this.sessions[params.sessionId].query.interrupt();
   }
 
@@ -1006,6 +1025,7 @@ export function toAcpNotifications(
   toolUseCache: ToolUseCache,
   client: AgentSideConnection,
   logger: Logger,
+  subagentTracker?: SubagentTracker,
 ): SessionNotification[] {
   if (typeof content === "string") {
     return [
@@ -1070,6 +1090,91 @@ export function toAcpNotifications(
               entries: planEntries(chunk.input as { todos: ClaudePlanEntry[] }),
             };
           }
+        } else if (chunk.name === "Task" && subagentTracker && isTaskToolInput(chunk.input)) {
+          // Track Task tool as subagent
+          const input = chunk.input as TaskToolInput;
+          subagentTracker.trackSubagent(chunk.id, sessionId, input);
+
+          // Register hook callback for subagent completion
+          registerHookCallback(chunk.id, {
+            onPostToolUseHook: async (toolUseId, toolInput, toolResponse) => {
+              // Extract agentId from response if available
+              let agentId: string | undefined;
+              if (toolResponse && typeof toolResponse === "object" && "agentId" in toolResponse) {
+                agentId = (toolResponse as { agentId?: string }).agentId;
+              }
+
+              // Check if it was an error
+              const isError =
+                toolResponse &&
+                typeof toolResponse === "object" &&
+                "is_error" in toolResponse &&
+                (toolResponse as { is_error?: boolean }).is_error;
+
+              if (isError) {
+                const errorMsg =
+                  typeof toolResponse === "object" && toolResponse && "error" in toolResponse
+                    ? String((toolResponse as { error?: unknown }).error)
+                    : "Unknown error";
+                await subagentTracker.failSubagent(toolUseId, errorMsg);
+              } else {
+                await subagentTracker.completeSubagent(toolUseId, toolResponse, agentId);
+              }
+
+              // Also send the standard tool update
+              const toolUse = toolUseCache[toolUseId];
+              if (toolUse) {
+                const update: SessionNotification["update"] = {
+                  _meta: {
+                    claudeCode: {
+                      toolResponse,
+                      toolName: toolUse.name,
+                    },
+                  } satisfies ToolUpdateMeta,
+                  toolCallId: toolUseId,
+                  sessionUpdate: "tool_call_update",
+                };
+                await client.sessionUpdate({
+                  sessionId,
+                  update,
+                });
+              }
+            },
+          });
+
+          // Mark subagent as started
+          subagentTracker.startSubagent(chunk.id);
+
+          let rawInput;
+          try {
+            rawInput = JSON.parse(JSON.stringify(chunk.input));
+          } catch {
+            // ignore if we can't turn it to JSON
+          }
+
+          // Send tool_call notification with subagent metadata
+          update = {
+            _meta: {
+              claudeCode: {
+                toolName: chunk.name,
+                subagent: {
+                  id: chunk.id,
+                  eventType: "subagent_started",
+                  subagentType: input.subagent_type,
+                  description: input.description,
+                  status: "running",
+                  parentSessionId: sessionId,
+                  model: input.model,
+                  runInBackground: input.run_in_background ?? false,
+                },
+              },
+            } satisfies ToolUpdateMeta & SubagentUpdateMeta,
+            toolCallId: chunk.id,
+            sessionUpdate: "tool_call",
+            rawInput,
+            status: "pending",
+            ...toolInfoFromToolUse(chunk),
+          };
         } else {
           // Register hook callback to receive the structured output from the hook
           registerHookCallback(chunk.id, {
@@ -1179,6 +1284,7 @@ export function streamEventToAcpNotifications(
   toolUseCache: ToolUseCache,
   client: AgentSideConnection,
   logger: Logger,
+  subagentTracker?: SubagentTracker,
 ): SessionNotification[] {
   const event = message.event;
   switch (event.type) {
@@ -1190,6 +1296,7 @@ export function streamEventToAcpNotifications(
         toolUseCache,
         client,
         logger,
+        subagentTracker,
       );
     case "content_block_delta":
       return toAcpNotifications(
@@ -1199,6 +1306,7 @@ export function streamEventToAcpNotifications(
         toolUseCache,
         client,
         logger,
+        subagentTracker,
       );
     // No content
     case "message_start":
