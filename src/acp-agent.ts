@@ -83,6 +83,7 @@ type Session = {
   cancelled: boolean;
   permissionMode: PermissionMode;
   settingsManager: SettingsManager;
+  approvedBashPrompts?: Array<{ tool: string; prompt: string }>;
 };
 
 type BackgroundTerminal =
@@ -499,8 +500,31 @@ export class ClaudeAcpAgent implements Agent {
       }
 
       if (toolName === "ExitPlanMode") {
+        // Parse allowedPrompts from the tool input
+        const exitPlanInput = toolInput as {
+          allowedPrompts?: Array<{ tool: string; prompt: string }>;
+        };
+        const allowedPrompts = exitPlanInput.allowedPrompts || [];
+
+        // Format requested permissions for display
+        const toolCallContent: Array<{ type: "text"; text: string }> = [];
+        if (allowedPrompts.length > 0) {
+          const permissionLines = allowedPrompts.map(
+            (p) => `  - ${p.tool}(prompt: ${p.prompt})`,
+          );
+          toolCallContent.push({
+            type: "text",
+            text: `**Requested permissions:**\n${permissionLines.join("\n")}`,
+          });
+        }
+
         const response = await this.client.requestPermission({
           options: [
+            {
+              kind: "allow_always",
+              name: "Yes, clear context and auto-accept edits",
+              optionId: "clearAndAcceptEdits",
+            },
             {
               kind: "allow_always",
               name: "Yes, and auto-accept edits",
@@ -514,30 +538,60 @@ export class ClaudeAcpAgent implements Agent {
             toolCallId: toolUseID,
             rawInput: toolInput,
             title: toolInfoFromToolUse({ name: toolName, input: toolInput }).title,
+            content: toolCallContent.length > 0 ? toolCallContent : undefined,
           },
+          _meta: allowedPrompts.length > 0 ? { requestedPermissions: allowedPrompts } : undefined,
         });
 
         if (signal.aborted || response.outcome?.outcome === "cancelled") {
           throw new Error("Tool use aborted");
         }
-        if (
-          response.outcome?.outcome === "selected" &&
-          (response.outcome.optionId === "default" || response.outcome.optionId === "acceptEdits")
-        ) {
-          session.permissionMode = response.outcome.optionId;
+
+        const selectedOption = response.outcome?.outcome === "selected" ? response.outcome.optionId : null;
+
+        if (selectedOption === "default" || selectedOption === "acceptEdits" || selectedOption === "clearAndAcceptEdits") {
+          // Store approved bash prompts in session
+          if (allowedPrompts.length > 0) {
+            session.approvedBashPrompts = allowedPrompts;
+          }
+
+          // Determine the permission mode based on selection
+          const permissionMode: PermissionMode = selectedOption === "default" ? "default" : "acceptEdits";
+          session.permissionMode = permissionMode;
+
           await this.client.sessionUpdate({
             sessionId,
             update: {
               sessionUpdate: "current_mode_update",
-              currentModeId: response.outcome.optionId,
+              currentModeId: permissionMode,
             },
           });
+
+          // Handle context clearing if requested
+          if (selectedOption === "clearAndAcceptEdits") {
+            // Get the plan content from the tool input to preserve it after clearing
+            const planFilePath = (toolInput as { planFilePath?: string }).planFilePath;
+            const compactInstructions = planFilePath
+              ? `Keep a summary of the implementation plan. The user has approved the plan and wants to start coding. The plan file is at: ${planFilePath}`
+              : "Keep a summary of the implementation plan. The user has approved the plan and wants to start coding.";
+
+            // Send a synthetic message to trigger compact
+            session.input.push({
+              type: "user",
+              message: {
+                role: "user",
+                content: `/compact ${compactInstructions}`,
+              },
+              parent_tool_use_id: null,
+              session_id: sessionId,
+            });
+          }
 
           return {
             behavior: "allow",
             updatedInput: toolInput,
             updatedPermissions: suggestions ?? [
-              { type: "setMode", mode: response.outcome.optionId, destination: "session" },
+              { type: "setMode", mode: permissionMode, destination: "session" },
             ],
           };
         } else {
@@ -643,6 +697,28 @@ export class ClaudeAcpAgent implements Agent {
             { type: "addRules", rules: [{ toolName }], behavior: "allow", destination: "session" },
           ],
         };
+      }
+
+      // Check if Bash command matches approved prompts from plan mode
+      if (toolName === "Bash" && session.approvedBashPrompts && session.approvedBashPrompts.length > 0) {
+        const bashInput = toolInput as { description?: string; command?: string };
+        const description = bashInput.description || "";
+
+        // Substring match: if any approved prompt appears in the command description
+        const matchesApprovedPrompt = session.approvedBashPrompts.some((prompt) => {
+          if (prompt.tool !== "Bash") return false;
+          return description.toLowerCase().includes(prompt.prompt.toLowerCase());
+        });
+
+        if (matchesApprovedPrompt) {
+          return {
+            behavior: "allow",
+            updatedInput: toolInput,
+            updatedPermissions: suggestions ?? [
+              { type: "addRules", rules: [{ toolName }], behavior: "allow", destination: "session" },
+            ],
+          };
+        }
       }
 
       const response = await this.client.requestPermission({
