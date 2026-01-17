@@ -403,7 +403,7 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
 
     case "AskUserQuestion":
       return {
-        title: "Question",
+        title: input?.questions?.[0]?.header || "Question",
         kind: "think",
         content: input?.questions
           ? [
@@ -412,7 +412,14 @@ export function toolInfoFromToolUse(toolUse: any): ToolInfo {
                 content: {
                   type: "text",
                   text: Array.isArray(input.questions)
-                    ? input.questions.map((q: any) => q.question).join("\n")
+                    ? input.questions
+                        .map((q: any) => {
+                          const options = q.options
+                            ?.map((o: any) => `  - ${o.label}: ${o.description}`)
+                            .join("\n");
+                          return `${q.question}\n${options || ""}`;
+                        })
+                        .join("\n\n")
                     : String(input.questions),
                 },
               },

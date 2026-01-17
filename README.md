@@ -4,7 +4,7 @@
 
 > **Fork of [@zed-industries/claude-code-acp](https://github.com/zed-industries/claude-code-acp)**
 >
-> This fork adds support for **subagent (Task tool) tracking** and will soon include **AskUserQuestion tool** support.
+> This fork adds support for **subagent (Task tool) tracking** and **AskUserQuestion tool** support.
 
 Use [Claude Code](https://www.anthropic.com/claude-code) from [ACP-compatible](https://agentclientprotocol.com) clients such as [Zed](https://zed.dev)!
 
@@ -34,6 +34,7 @@ This adapter implements an ACP agent using the official [Claude Agent SDK](https
 - Custom [Slash commands](https://docs.anthropic.com/en/docs/claude-code/slash-commands)
 - Client MCP servers
 - **Subagent tracking** (Task tool lifecycle events)
+- **AskUserQuestion** (Claude can ask clarifying questions)
 
 ## Subagent Tracking
 
@@ -65,6 +66,38 @@ tracker.getStats();                     // Counts & avg duration
 ```
 
 See [docs/subagent-tracking.md](docs/subagent-tracking.md) for full API documentation.
+
+## AskUserQuestion
+
+Claude can ask clarifying questions during execution. Questions are presented via the ACP permission request system:
+
+```typescript
+// Claude sends a question like:
+{
+  "question": "Which testing framework should we use?",
+  "header": "Testing",
+  "options": [
+    { "label": "Jest", "description": "Popular JavaScript testing framework" },
+    { "label": "Vitest", "description": "Vite-native, fast testing framework" }
+  ],
+  "multiSelect": false
+}
+
+// User selects an option, Claude receives:
+{
+  "answers": {
+    "Which testing framework should we use?": "Vitest"
+  }
+}
+```
+
+Features:
+- Multiple questions per request (1-4)
+- 2-4 options per question with labels and descriptions
+- MultiSelect support for non-mutually-exclusive choices
+- "Other" option for free-text input
+
+See [docs/ask-user-question.md](docs/ask-user-question.md) for ACP client integration details.
 
 ## Usage
 

@@ -811,6 +811,133 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)("SDK behavior", () => {
   }, 10000);
 });
 
+describe("AskUserQuestion tool", () => {
+  it("should handle AskUserQuestion toolInfoFromToolUse with single question", () => {
+    const tool_use = {
+      type: "tool_use",
+      id: "toolu_01ABC123",
+      name: "AskUserQuestion",
+      input: {
+        questions: [
+          {
+            question: "Which testing framework do you prefer?",
+            header: "Framework",
+            options: [
+              { label: "Jest", description: "Popular JavaScript testing framework" },
+              { label: "Vitest", description: "Vite-native testing framework" },
+            ],
+            multiSelect: false,
+          },
+        ],
+      },
+    };
+
+    const result = toolInfoFromToolUse(tool_use);
+
+    expect(result.title).toBe("Framework");
+    expect(result.kind).toBe("think");
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]).toMatchObject({
+      type: "content",
+      content: {
+        type: "text",
+      },
+    });
+    // Check that the text includes the question and options
+    const text = (result.content[0] as any).content.text;
+    expect(text).toContain("Which testing framework do you prefer?");
+    expect(text).toContain("Jest");
+    expect(text).toContain("Vitest");
+  });
+
+  it("should handle AskUserQuestion toolInfoFromToolUse with multiple questions", () => {
+    const tool_use = {
+      type: "tool_use",
+      id: "toolu_01DEF456",
+      name: "AskUserQuestion",
+      input: {
+        questions: [
+          {
+            question: "Which language?",
+            header: "Language",
+            options: [
+              { label: "TypeScript", description: "Typed JavaScript" },
+              { label: "JavaScript", description: "Plain JavaScript" },
+            ],
+            multiSelect: false,
+          },
+          {
+            question: "Which bundler?",
+            header: "Bundler",
+            options: [
+              { label: "Vite", description: "Fast build tool" },
+              { label: "Webpack", description: "Flexible bundler" },
+            ],
+            multiSelect: false,
+          },
+        ],
+      },
+    };
+
+    const result = toolInfoFromToolUse(tool_use);
+
+    expect(result.title).toBe("Language"); // Uses first question's header
+    expect(result.kind).toBe("think");
+
+    const text = (result.content[0] as any).content.text;
+    expect(text).toContain("Which language?");
+    expect(text).toContain("TypeScript");
+    expect(text).toContain("Which bundler?");
+    expect(text).toContain("Vite");
+  });
+
+  it("should handle AskUserQuestion toolInfoFromToolUse with empty questions", () => {
+    const tool_use = {
+      type: "tool_use",
+      id: "toolu_01GHI789",
+      name: "AskUserQuestion",
+      input: {},
+    };
+
+    const result = toolInfoFromToolUse(tool_use);
+
+    expect(result.title).toBe("Question");
+    expect(result.kind).toBe("think");
+    expect(result.content).toEqual([]);
+  });
+
+  it("should handle AskUserQuestion with multiSelect option", () => {
+    const tool_use = {
+      type: "tool_use",
+      id: "toolu_01JKL012",
+      name: "AskUserQuestion",
+      input: {
+        questions: [
+          {
+            question: "Which features do you want?",
+            header: "Features",
+            options: [
+              { label: "Auth", description: "Authentication system" },
+              { label: "API", description: "REST API endpoints" },
+              { label: "DB", description: "Database integration" },
+            ],
+            multiSelect: true,
+          },
+        ],
+      },
+    };
+
+    const result = toolInfoFromToolUse(tool_use);
+
+    expect(result.title).toBe("Features");
+    const text = (result.content[0] as any).content.text;
+    expect(text).toContain("Which features do you want?");
+    expect(text).toContain("Auth");
+    expect(text).toContain("API");
+    expect(text).toContain("DB");
+  });
+});
+
 describe("permission requests", () => {
   it("should include title field in tool permission request structure", () => {
     // Test various tool types to ensure title is correctly generated

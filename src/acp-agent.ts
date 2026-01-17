@@ -549,6 +549,89 @@ export class ClaudeAcpAgent implements Agent {
         }
       }
 
+      if (toolName === "AskUserQuestion") {
+        const input = toolInput as {
+          questions?: Array<{
+            question: string;
+            header: string;
+            options: Array<{ label: string; description: string }>;
+            multiSelect: boolean;
+          }>;
+        };
+        const answers: Record<string, string> = {};
+
+        // Process each question sequentially
+        for (const question of input.questions || []) {
+          // Build permission options from question options
+          const permissionOptions: Array<{
+            kind: "allow_once";
+            name: string;
+            optionId: string;
+          }> = question.options.map((opt) => ({
+            kind: "allow_once" as const,
+            name: `${opt.label} - ${opt.description}`,
+            optionId: opt.label,
+          }));
+
+          // Add "Other" option for free-text input
+          permissionOptions.push({
+            kind: "allow_once" as const,
+            name: "Other (type custom answer)",
+            optionId: "__other__",
+          });
+
+          const response = await this.client.requestPermission({
+            options: permissionOptions,
+            sessionId,
+            toolCall: {
+              toolCallId: toolUseID,
+              rawInput: { question: question.question, header: question.header },
+              title: question.header || "Question",
+            },
+            _meta: {
+              claudeCode: {
+                questionType: "askUserQuestion",
+                multiSelect: question.multiSelect,
+              },
+            },
+          });
+
+          if (signal.aborted || response.outcome?.outcome === "cancelled") {
+            return {
+              behavior: "deny",
+              message: "User cancelled the question",
+              interrupt: true,
+            };
+          }
+
+          if (response.outcome?.outcome === "selected") {
+            const selectedId = response.outcome.optionId;
+
+            if (selectedId === "__other__") {
+              // Handle free-text - ACP client should provide custom text in _meta
+              const customText =
+                (response.outcome as { _meta?: { customText?: string } })._meta?.customText ||
+                "Other";
+              answers[question.question] = customText;
+            } else if (question.multiSelect) {
+              // For multiSelect, collect all selected labels
+              const existing = answers[question.question];
+              answers[question.question] = existing ? `${existing}, ${selectedId}` : selectedId;
+            } else {
+              answers[question.question] = selectedId;
+            }
+          }
+        }
+
+        return {
+          behavior: "allow",
+          updatedInput: {
+            questions: input.questions,
+            answers,
+          },
+        };
+      }
+
       if (
         session.permissionMode === "bypassPermissions" ||
         (session.permissionMode === "acceptEdits" && EDIT_TOOL_NAMES.includes(toolName))
@@ -742,8 +825,7 @@ export class ClaudeAcpAgent implements Agent {
     };
 
     const allowedTools = [];
-    // Disable this for now, not a great way to expose this over ACP at the moment (in progress work so we can revisit)
-    const disallowedTools = ["AskUserQuestion"];
+    const disallowedTools: string[] = [];
 
     // Check if built-in tools should be disabled
     const disableBuiltInTools = params._meta?.disableBuiltInTools === true;
