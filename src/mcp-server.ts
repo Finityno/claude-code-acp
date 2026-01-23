@@ -19,7 +19,9 @@ import * as fs from "node:fs/promises";
 
 import { sleep, unreachable, extractLinesWithByteLimit } from "./utils.js";
 import { registerTaskMcpTools } from "./task-mcp-tools.js";
+import { registerWorkItemMcpTools } from "./work-item-mcp-tools.js";
 import { acpToolNames } from "./tools.js";
+import { TaskStore } from "./task-store.js";
 
 export const SYSTEM_REMINDER = `
 
@@ -56,6 +58,7 @@ export function createMcpServer(
   agent: ClaudeAcpAgent,
   sessionId: string,
   clientCapabilities: ClientCapabilities | undefined,
+  taskStore?: TaskStore,
 ): McpServer {
   /**
    * This checks if a given path is related to internal agent persistence and if the agent should be allowed to read/write from here.
@@ -690,11 +693,22 @@ In sessions with ${acpToolNames.killShell} always use it instead of KillShell.`,
     );
   }
 
-  // Register task management tools
+  // Register subagent tracking tools (for Task tool spawning)
   registerTaskMcpTools(server, {
     tracker: agent.subagentTracker,
     sessionId,
   });
+
+  // Register work item task tools (TaskCreate, TaskGet, TaskUpdate, TaskList)
+  // Note: taskStore should always be provided now (auto-generated if not set via env)
+  if (taskStore) {
+    console.log("[MCP] Registering work item task tools (TaskCreate, TaskGet, TaskUpdate, TaskList)");
+    registerWorkItemMcpTools(server, {
+      taskStore,
+    });
+  } else {
+    console.warn("[MCP] taskStore not provided - work item task tools will not be available");
+  }
 
   return server;
 }

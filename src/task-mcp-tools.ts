@@ -2,6 +2,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { TaskManager } from "./task-manager.js";
 import { SubagentStatus, SubagentTracker } from "./subagent-tracker.js";
+import { homedir } from "os";
+import { join } from "path";
+import { readFile } from "fs/promises";
 
 export interface TaskMcpToolsOptions {
   /** The SubagentTracker instance */
@@ -10,6 +13,86 @@ export interface TaskMcpToolsOptions {
   taskManager?: TaskManager;
   /** Session ID for context */
   sessionId: string;
+}
+
+/**
+ * Session entry from Claude Code's sessions-index.json
+ */
+interface ClaudeSessionEntry {
+  sessionId: string;
+  fullPath: string;
+  fileMtime: number;
+  firstPrompt: string;
+  summary: string;
+  messageCount: number;
+  created: string;
+  modified: string;
+  gitBranch?: string;
+  projectPath: string;
+  isSidechain: boolean;
+}
+
+/**
+ * Sessions index file format
+ */
+interface SessionsIndex {
+  version: number;
+  entries: ClaudeSessionEntry[];
+  originalPath: string;
+}
+
+/**
+ * Get Claude Code's project path for a given working directory
+ * Converts /Users/foo/project -> -Users-foo-project
+ */
+function getClaudeProjectPath(workingDir: string): string {
+  // Replace path separators with dashes and remove leading slash
+  return workingDir.replace(/\//g, "-");
+}
+
+/**
+ * Read sessions from Claude Code's sessions-index.json
+ */
+async function readClaudeSessions(workingDir?: string): Promise<ClaudeSessionEntry[]> {
+  const claudeDir = join(homedir(), ".claude", "projects");
+  const sessions: ClaudeSessionEntry[] = [];
+
+  try {
+    // If working dir is specified, only read that project's sessions
+    if (workingDir) {
+      const projectPath = getClaudeProjectPath(workingDir);
+      const indexPath = join(claudeDir, projectPath, "sessions-index.json");
+      try {
+        const content = await readFile(indexPath, "utf8");
+        const index: SessionsIndex = JSON.parse(content);
+        sessions.push(...index.entries);
+      } catch {
+        // Project might not exist
+      }
+    } else {
+      // Read all projects' sessions
+      const { readdir } = await import("fs/promises");
+      const projects = await readdir(claudeDir);
+
+      for (const project of projects) {
+        const indexPath = join(claudeDir, project, "sessions-index.json");
+        try {
+          const content = await readFile(indexPath, "utf8");
+          const index: SessionsIndex = JSON.parse(content);
+          sessions.push(...index.entries);
+        } catch {
+          // Skip projects without sessions-index.json
+        }
+      }
+    }
+
+    // Sort by modified date, newest first
+    sessions.sort((a, b) => new Date(b.modified).getTime() - new Date(a.modified).getTime());
+  } catch {
+    // Claude directory might not exist
+  }
+
+  return sessions;
 }
 
 /**
@@ -209,14 +292,17 @@ Can filter by status, session, or background execution.`,
     },
   );
 
-  // List resumable tasks
+  // List resumable tasks - reads from Claude Code's sessions-index.json
   server.registerTool(
     "ListResumableTasks",
     {
       title: "List Resumable Tasks",
-      description: "List tasks that can be resumed via Task tool's resume parameter.",
+      description: `List previous Claude Code sessions that can be resumed via Task tool's resume parameter.
+Reads from Claude Code's sessions storage (~/.claude/projects/) to find resumable sessions.
+Also shows in-memory tracked subagents that haven't been persisted yet.`,
       inputSchema: {
-        limit: z.number().optional().default(10).describe("Maximum number of tasks to return"),
+        limit: z.number().optional().default(10).describe("Maximum number of sessions to return"),
+        projectPath: z.string().optional().describe("Filter to sessions from a specific project path"),
       },
       annotations: {
         title: "List resumable tasks",
@@ -224,13 +310,30 @@ Can filter by status, session, or background execution.`,
       },
     },
     async (input) => {
-      const tasks = tracker.getResumableTasks().slice(0, input.limit);
+      // Get sessions from Claude Code's storage
+      const claudeSessions = await readClaudeSessions(input.projectPath);
+      const limited = claudeSessions.slice(0, input.limit);
+
+      // Also get in-memory tracked subagents (for current session)
+      const inMemoryTasks = tracker.getResumableTasks();
+
       return {
         content: [{
           type: "text",
           text: JSON.stringify({
-            count: tasks.length,
-            tasks: tasks.map((t) => ({
+            count: limited.length,
+            tasks: limited.map((s) => ({
+              sessionId: s.sessionId,
+              summary: s.summary,
+              firstPrompt: s.firstPrompt.substring(0, 100) + (s.firstPrompt.length > 100 ? "..." : ""),
+              messageCount: s.messageCount,
+              created: s.created,
+              modified: s.modified,
+              gitBranch: s.gitBranch,
+              projectPath: s.projectPath,
+            })),
+            // Also include in-memory subagents not yet persisted
+            inMemorySubagents: inMemoryTasks.length > 0 ? inMemoryTasks.map((t) => ({
               id: t.id,
               agentId: t.agentId,
               type: t.subagentType,
@@ -238,8 +341,7 @@ Can filter by status, session, or background execution.`,
               status: t.status,
               completedAt: t.completedAt ? new Date(t.completedAt).toISOString() : undefined,
               summary: t.summary,
-              error: t.error,
-            })),
+            })) : undefined,
           }, null, 2),
         }],
       };

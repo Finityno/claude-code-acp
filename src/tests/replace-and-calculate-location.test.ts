@@ -170,7 +170,7 @@ describe("replaceAndCalculateLocation", () => {
     const result = replaceAndCalculateLocation(content, [{ oldText: "text", newText: "replaced" }]);
 
     expect(result.lineNumbers).toEqual([500]);
-    expect(result.newContent).includes("line with replaced");
+    expect(result.newContent).toContain("line with replaced");
   });
 
   it("should handle overlapping matches correctly", () => {

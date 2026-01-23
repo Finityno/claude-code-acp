@@ -59,8 +59,23 @@ export {
   type TaskFilter,
 } from "./task-manager.js";
 
-// Export task MCP tools registration
+// Export subagent MCP tools registration (tracks Task tool spawning)
 export { registerTaskMcpTools, type TaskMcpToolsOptions } from "./task-mcp-tools.js";
+
+// Export work item task store and tools (TaskCreate, TaskGet, TaskUpdate, TaskList)
+export {
+  TaskStore,
+  type Task,
+  type TaskStatus,
+  type TaskCreateInput,
+  type TaskUpdateInput,
+  type TaskStoreOptions,
+} from "./task-store.js";
+
+export {
+  registerWorkItemMcpTools,
+  type WorkItemMcpToolsOptions,
+} from "./work-item-mcp-tools.js";
 
 // Export types
 export type { ClaudePlanEntry } from "./tools.js";
