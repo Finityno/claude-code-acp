@@ -18,6 +18,7 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 
 import { sleep, unreachable, extractLinesWithByteLimit } from "./utils.js";
+import { registerTaskMcpTools } from "./task-mcp-tools.js";
 import { acpToolNames } from "./tools.js";
 
 export const SYSTEM_REMINDER = `
@@ -688,6 +689,12 @@ In sessions with ${acpToolNames.killShell} always use it instead of KillShell.`,
       },
     );
   }
+
+  // Register task management tools
+  registerTaskMcpTools(server, {
+    tracker: agent.subagentTracker,
+    sessionId,
+  });
 
   return server;
 }

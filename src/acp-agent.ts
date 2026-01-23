@@ -286,8 +286,14 @@ export class ClaudeAcpAgent implements Agent {
               break;
             case "compact_boundary":
             case "hook_response":
+            case "hook_started":
+            case "hook_progress":
             case "status":
               // Todo: process via status api: https://docs.claude.com/en/docs/claude-code/hooks#hook-output
+              break;
+            case "task_notification":
+              // Handle SDK task notification for background tasks
+              await this.handleTaskNotification(message, params.sessionId);
               break;
             default:
               unreachable(message, this.logger);
@@ -441,6 +447,31 @@ export class ClaudeAcpAgent implements Agent {
     }
 
     await this.sessions[params.sessionId].query.interrupt();
+  }
+
+  /**
+   * Handle SDK task notification for background tasks
+   */
+  private async handleTaskNotification(
+    message: {
+      task_id: string;
+      status: "completed" | "failed" | "stopped";
+      output_file: string;
+      summary: string;
+    },
+    sessionId: string,
+  ): Promise<void> {
+    // Update the subagent tracker
+    await this.subagentTracker.handleTaskNotification({
+      task_id: message.task_id,
+      status: message.status,
+      output_file: message.output_file,
+      summary: message.summary,
+    });
+
+    this.logger.log(
+      `[ACP] Task notification: ${message.task_id} -> ${message.status}`,
+    );
   }
 
   async unstable_setSessionModel(

@@ -47,7 +47,20 @@ export {
   type SubagentEventListener,
   type SubagentStats,
   type TaskToolInput,
+  type SerializedTrackerState,
+  type SerializedTask,
+  type SDKTaskNotification,
 } from "./subagent-tracker.js";
+
+// Export task management
+export {
+  TaskManager,
+  type TaskManagerOptions,
+  type TaskFilter,
+} from "./task-manager.js";
+
+// Export task MCP tools registration
+export { registerTaskMcpTools, type TaskMcpToolsOptions } from "./task-mcp-tools.js";
 
 // Export types
 export type { ClaudePlanEntry } from "./tools.js";
