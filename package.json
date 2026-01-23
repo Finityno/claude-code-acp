@@ -61,7 +61,11 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@agentclientprotocol/sdk": "0.13.0",
+<<<<<<< Updated upstream
     "@anthropic-ai/claude-agent-sdk": "0.2.7",
+=======
+    "@anthropic-ai/claude-agent-sdk": "^0.2.17",
+>>>>>>> Stashed changes
     "@modelcontextprotocol/sdk": "1.25.2",
     "diff": "8.0.3",
     "minimatch": "10.1.1"
