@@ -106,7 +106,6 @@ export class TaskStore {
       }
 
       this.initialized = true;
-      this.logger.log(`[TaskStore] Initialized at ${this.taskListPath}, next ID: ${this.nextId}`);
     } catch (err) {
       this.logger.error(`[TaskStore] Failed to initialize:`, err);
       throw err;
@@ -131,7 +130,6 @@ export class TaskStore {
     };
 
     await this.saveTask(task);
-    this.logger.log(`[TaskStore] Created task ${task.id}: ${task.subject}`);
 
     return task;
   }
@@ -224,7 +222,6 @@ export class TaskStore {
     }
 
     await this.saveTask(task);
-    this.logger.log(`[TaskStore] Updated task ${taskId}: ${task.subject} -> ${task.status}`);
 
     return task;
   }
@@ -296,7 +293,6 @@ export class TaskStore {
 
     try {
       await rm(this.getTaskFilePath(taskId));
-      this.logger.log(`[TaskStore] Deleted task ${taskId}`);
       return true;
     } catch {
       return false;
@@ -315,15 +311,11 @@ export class TaskStore {
       this.watcher = fsWatch.watch(this.taskListPath, async (eventType, filename) => {
         if (!filename?.endsWith(".json")) return;
 
-        this.logger.log(`[TaskStore] File change detected: ${eventType} ${filename}`);
-
         if (this.onChange) {
           const tasks = await this.list();
           this.onChange(tasks);
         }
       });
-
-      this.logger.log(`[TaskStore] Watching for changes at ${this.taskListPath}`);
     } catch (err) {
       this.logger.error(`[TaskStore] Failed to start watcher:`, err);
     }
@@ -336,7 +328,6 @@ export class TaskStore {
     if (this.watcher) {
       this.watcher.close();
       this.watcher = null;
-      this.logger.log(`[TaskStore] Stopped watching`);
     }
   }
 
@@ -386,8 +377,8 @@ export class TaskStore {
     // Handle common verb endings
     if (verb.endsWith("e")) {
       participle = verb.slice(0, -1) + "ing";
-    } else if (verb.match(/[aeiou][^aeiou]$/)) {
-      // Double consonant for short vowel + consonant
+    } else if (verb.match(/[aeiou][bcdfghjklmnpqrstvz]$/)) {
+      // Double consonant for short vowel + consonant (excluding w, x, y)
       participle = verb + verb.slice(-1) + "ing";
     } else {
       participle = verb + "ing";

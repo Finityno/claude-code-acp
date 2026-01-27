@@ -170,7 +170,7 @@ export class ClaudeAcpAgent implements Agent {
     // Initialize TaskStore (use provided task list ID or auto-generate one)
     const taskListId = process.env.CLAUDE_CODE_TASK_LIST_ID || crypto.randomUUID();
     this.taskListId = taskListId;
-    console.log(`[ACP] Initializing TaskStore with taskListId: ${taskListId}`);
+
     this.taskStore = new TaskStore({
       taskListId,
       logger: this.logger,
@@ -198,6 +198,8 @@ export class ClaudeAcpAgent implements Agent {
     // Initialize and start watching for changes
     this.taskStore.init().then(() => {
       this.taskStore.watch();
+    }).catch((error) => {
+      this.logger.error("[ACP] Failed to initialize TaskStore:", error);
     });
   }
 
@@ -460,6 +462,9 @@ export class ClaudeAcpAgent implements Agent {
           break;
         case "auth_status":
           break;
+        case "tool_use_summary":
+          // Tool use summary messages are informational, skip them
+          break;
         default:
           unreachable(message);
           break;
@@ -505,9 +510,7 @@ export class ClaudeAcpAgent implements Agent {
       summary: message.summary,
     });
 
-    this.logger.log(
-      `[ACP] Task notification: ${message.task_id} -> ${message.status}`,
-    );
+
   }
 
   async unstable_setSessionModel(
@@ -889,7 +892,7 @@ export class ClaudeAcpAgent implements Agent {
 
     // Only add the acp MCP server if built-in tools are not disabled
     if (!params._meta?.disableBuiltInTools) {
-      console.log(`[ACP] Creating MCP server for session ${sessionId} with taskStore: ${!!this.taskStore}`);
+
       const server = createMcpServer(this, sessionId, this.clientCapabilities, this.taskStore);
       mcpServers["acp"] = {
         type: "sdk",

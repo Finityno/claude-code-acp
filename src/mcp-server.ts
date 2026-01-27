@@ -4,7 +4,7 @@ import {
   FileEditInput,
   FileReadInput,
   FileWriteInput,
-  KillShellInput,
+  TaskStopInput,
 } from "@anthropic-ai/claude-agent-sdk/sdk-tools.js";
 import { z } from "zod";
 import { CLAUDE_CONFIG_DIR, ClaudeAcpAgent } from "./acp-agent.js";
@@ -632,12 +632,16 @@ In sessions with ${acpToolNames.killShell} always use it instead of KillShell.`,
             ),
         },
       },
-      async (input: KillShellInput) => {
+      async (input: TaskStopInput) => {
         try {
-          const bgTerm = agent.backgroundTerminals[input.shell_id];
+          const shellId = input.shell_id ?? input.task_id;
+          if (!shellId) {
+            throw new Error("Missing shell_id or task_id");
+          }
+          const bgTerm = agent.backgroundTerminals[shellId];
 
           if (!bgTerm) {
-            throw new Error(`Unknown shell ${input.shell_id}`);
+            throw new Error(`Unknown shell ${shellId}`);
           }
 
           switch (bgTerm.status) {
@@ -673,10 +677,6 @@ In sessions with ${acpToolNames.killShell} always use it instead of KillShell.`,
               return {
                 content: [{ type: "text", text: "Command killed by timeout." }],
               };
-            default: {
-              unreachable(bgTerm);
-              throw new Error("Unexpected background terminal status");
-            }
           }
         } catch (error) {
           return {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { TaskStore, Task } from "../task-store.js";
 import { rm, mkdir, readdir } from "fs/promises";
 import { join } from "path";

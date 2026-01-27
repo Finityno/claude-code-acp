@@ -296,10 +296,6 @@ export class SubagentTracker {
     }
     this.sessionSubagents.get(sessionId)!.add(toolUseId);
 
-    this.logger.log(
-      `[SubagentTracker] Tracked new subagent: ${toolUseId} (${input.subagent_type}: ${input.description})${isResumed ? " [RESUMED]" : ""}`,
-    );
-
     return subagent;
   }
 
@@ -341,10 +337,6 @@ export class SubagentTracker {
 
     await this.emitEvent("subagent_completed", subagent);
     await this.sendSubagentNotification(subagent, "subagent_completed");
-
-    this.logger.log(
-      `[SubagentTracker] Subagent completed: ${toolUseId} (duration: ${this.getDuration(subagent)}ms)${agentId ? ` [agentId: ${agentId}]` : ""}`,
-    );
   }
 
   /**
@@ -381,8 +373,6 @@ export class SubagentTracker {
 
     await this.emitEvent("subagent_cancelled", subagent);
     await this.sendSubagentNotification(subagent, "subagent_cancelled");
-
-    this.logger.log(`[SubagentTracker] Subagent cancelled: ${toolUseId}`);
   }
 
   /**
@@ -421,10 +411,6 @@ export class SubagentTracker {
         await this.sendSubagentNotification(subagent, "subagent_stopped", notification);
         break;
     }
-
-    this.logger.log(
-      `[SubagentTracker] Task notification: ${notification.task_id} -> ${notification.status}`,
-    );
   }
 
   /**
@@ -653,8 +639,6 @@ export class SubagentTracker {
         this.agentIdToSubagent.set(task.agentId, task.id);
       }
     }
-
-    this.logger.log(`[SubagentTracker] Imported ${state.tasks.length} tasks from persistence`);
   }
 
   /**

@@ -43,11 +43,17 @@ interface SessionsIndex {
 
 /**
  * Get Claude Code's project path for a given working directory
- * Converts /Users/foo/project -> -Users-foo-project
+ * Converts /Users/foo/project -> Users-foo-project
+ * Handles both Unix and Windows paths safely
  */
 function getClaudeProjectPath(workingDir: string): string {
-  // Replace path separators with dashes and remove leading slash
-  return workingDir.replace(/\//g, "-");
+  // Remove Windows drive letters (e.g., C:, D:)
+  let sanitized = workingDir.replace(/^[A-Za-z]:/, "");
+  // Replace both forward and back slashes with dashes
+  sanitized = sanitized.replace(/[/\\]/g, "-");
+  // Remove leading dashes and collapse multiple dashes
+  sanitized = sanitized.replace(/^-+/, "").replace(/-+/g, "-");
+  return sanitized;
 }
 
 /**
@@ -132,7 +138,7 @@ Can filter by status, session, or background execution.`,
       const tasks = manager.getAllTasks({
         status: input.status as SubagentStatus[] | undefined,
         sessionId: input.sessionId,
-        runInBackground: input.backgroundOnly,
+        runInBackground: input.backgroundOnly === true ? true : undefined,
         subagentType: input.subagentType,
       });
       const limited = tasks.slice(0, input.limit);
@@ -287,7 +293,11 @@ Can filter by status, session, or background execution.`,
           content: [{ type: "text", text: `Task not running: ${task.status}` }],
         };
       }
-      await tracker.cancelSubagent(input.taskId);
+      if (taskManager) {
+        await taskManager.cancelTask(input.taskId);
+      } else {
+        await tracker.cancelSubagent(input.taskId);
+      }
       return { content: [{ type: "text", text: `Task ${input.taskId} cancelled` }] };
     },
   );

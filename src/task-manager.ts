@@ -93,21 +93,11 @@ export class TaskManager {
           (task) => task.createdAt > cutoff || task.status === "running",
         );
 
-        if (filteredTasks.length !== state.tasks.length) {
-          this.logger.log(
-            `[TaskManager] Filtered out ${state.tasks.length - filteredTasks.length} old tasks`,
-          );
-        }
-
         // Import filtered state
         this.tracker.importState({
           ...state,
           tasks: filteredTasks,
         });
-
-        this.logger.log(
-          `[TaskManager] Loaded ${filteredTasks.length} tasks from persistence`,
-        );
       }
     } catch (error) {
       this.logger.error("[TaskManager] Failed to load persisted state:", error);
@@ -122,6 +112,9 @@ export class TaskManager {
       return; // No changes to save
     }
 
+    // Clear flag before async operations - any new events will re-set it
+    this.isDirty = false;
+
     try {
       const state = this.tracker.exportState();
 
@@ -133,10 +126,9 @@ export class TaskManager {
       const tempPath = `${this.persistencePath}.tmp`;
       await fs.promises.writeFile(tempPath, JSON.stringify(state, null, 2), "utf-8");
       await fs.promises.rename(tempPath, this.persistencePath);
-
-      this.isDirty = false;
-      this.logger.log(`[TaskManager] Saved ${state.tasks.length} tasks to persistence`);
     } catch (error) {
+      // Restore flag on error so retry will happen
+      this.isDirty = true;
       this.logger.error("[TaskManager] Failed to save state:", error);
     }
   }
