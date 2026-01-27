@@ -4,7 +4,7 @@ import {
   FileEditInput,
   FileReadInput,
   FileWriteInput,
-  KillShellInput,
+  TaskStopInput,
 } from "@anthropic-ai/claude-agent-sdk/sdk-tools.js";
 import { z } from "zod";
 import { CLAUDE_CONFIG_DIR, ClaudeAcpAgent } from "./acp-agent.js";
@@ -18,7 +18,10 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 
 import { sleep, unreachable, extractLinesWithByteLimit } from "./utils.js";
+import { registerTaskMcpTools } from "./task-mcp-tools.js";
+import { registerWorkItemMcpTools } from "./work-item-mcp-tools.js";
 import { acpToolNames } from "./tools.js";
+import { TaskStore } from "./task-store.js";
 
 export const SYSTEM_REMINDER = `
 
@@ -55,6 +58,7 @@ export function createMcpServer(
   agent: ClaudeAcpAgent,
   sessionId: string,
   clientCapabilities: ClientCapabilities | undefined,
+  taskStore?: TaskStore,
 ): McpServer {
   /**
    * This checks if a given path is related to internal agent persistence and if the agent should be allowed to read/write from here.
@@ -633,12 +637,16 @@ In sessions with ${acpToolNames.killShell} always use it instead of KillShell.`,
             ),
         },
       },
-      async (input: KillShellInput) => {
+      async (input: TaskStopInput) => {
         try {
-          const bgTerm = agent.backgroundTerminals[input.shell_id];
+          const shellId = input.shell_id ?? input.task_id;
+          if (!shellId) {
+            throw new Error("Missing shell_id or task_id");
+          }
+          const bgTerm = agent.backgroundTerminals[shellId];
 
           if (!bgTerm) {
-            throw new Error(`Unknown shell ${input.shell_id}`);
+            throw new Error(`Unknown shell ${shellId}`);
           }
 
           switch (bgTerm.status) {
@@ -674,10 +682,6 @@ In sessions with ${acpToolNames.killShell} always use it instead of KillShell.`,
               return {
                 content: [{ type: "text", text: "Command killed by timeout." }],
               };
-            default: {
-              unreachable(bgTerm);
-              throw new Error("Unexpected background terminal status");
-            }
           }
         } catch (error) {
           return {
@@ -692,6 +696,23 @@ In sessions with ${acpToolNames.killShell} always use it instead of KillShell.`,
         }
       },
     );
+  }
+
+  // Register subagent tracking tools (for Task tool spawning)
+  registerTaskMcpTools(server, {
+    tracker: agent.subagentTracker,
+    sessionId,
+  });
+
+  // Register work item task tools (TaskCreate, TaskGet, TaskUpdate, TaskList)
+  // Note: taskStore should always be provided now (auto-generated if not set via env)
+  if (taskStore) {
+    console.log("[MCP] Registering work item task tools (TaskCreate, TaskGet, TaskUpdate, TaskList)");
+    registerWorkItemMcpTools(server, {
+      taskStore,
+    });
+  } else {
+    console.warn("[MCP] taskStore not provided - work item task tools will not be available");
   }
 
   return server;

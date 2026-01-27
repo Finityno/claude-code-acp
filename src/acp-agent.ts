@@ -62,6 +62,7 @@ import {
   SubagentUpdateMeta,
   isTaskToolInput,
 } from "./subagent-tracker.js";
+import { TaskStore } from "./task-store.js";
 import { ContentBlockParam } from "@anthropic-ai/sdk/resources";
 import { BetaContentBlock, BetaRawContentBlockDelta } from "@anthropic-ai/sdk/resources/beta.mjs";
 import packageJson from "../package.json" with { type: "json" };
@@ -156,6 +157,8 @@ export class ClaudeAcpAgent implements Agent {
   clientCapabilities?: ClientCapabilities;
   logger: Logger;
   subagentTracker: SubagentTracker;
+  taskStore: TaskStore;
+  taskListId: string;
 
   constructor(client: AgentSideConnection, logger?: Logger) {
     this.sessions = {};
@@ -163,6 +166,41 @@ export class ClaudeAcpAgent implements Agent {
     this.toolUseCache = {};
     this.logger = logger ?? console;
     this.subagentTracker = new SubagentTracker(client, this.logger);
+
+    // Initialize TaskStore (use provided task list ID or auto-generate one)
+    const taskListId = process.env.CLAUDE_CODE_TASK_LIST_ID || crypto.randomUUID();
+    this.taskListId = taskListId;
+
+    this.taskStore = new TaskStore({
+      taskListId,
+      logger: this.logger,
+      onChange: (tasks) => {
+        // Broadcast task updates to all sessions
+        for (const sessionId of Object.keys(this.sessions)) {
+          this.client.sessionUpdate({
+            sessionId,
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "task-list-update",
+              _meta: {
+                claudeCode: {
+                  taskListUpdate: {
+                    taskListId,
+                    tasks,
+                  },
+                },
+              },
+            },
+          });
+        }
+      },
+    });
+    // Initialize and start watching for changes
+    this.taskStore.init().then(() => {
+      this.taskStore.watch();
+    }).catch((error) => {
+      this.logger.error("[ACP] Failed to initialize TaskStore:", error);
+    });
   }
 
   async initialize(request: InitializeRequest): Promise<InitializeResponse> {
@@ -286,8 +324,14 @@ export class ClaudeAcpAgent implements Agent {
               break;
             case "compact_boundary":
             case "hook_response":
+            case "hook_started":
+            case "hook_progress":
             case "status":
               // Todo: process via status api: https://docs.claude.com/en/docs/claude-code/hooks#hook-output
+              break;
+            case "task_notification":
+              // Handle SDK task notification for background tasks
+              await this.handleTaskNotification(message, params.sessionId);
               break;
             default:
               unreachable(message, this.logger);
@@ -418,6 +462,9 @@ export class ClaudeAcpAgent implements Agent {
           break;
         case "auth_status":
           break;
+        case "tool_use_summary":
+          // Tool use summary messages are informational, skip them
+          break;
         default:
           unreachable(message);
           break;
@@ -441,6 +488,29 @@ export class ClaudeAcpAgent implements Agent {
     }
 
     await this.sessions[params.sessionId].query.interrupt();
+  }
+
+  /**
+   * Handle SDK task notification for background tasks
+   */
+  private async handleTaskNotification(
+    message: {
+      task_id: string;
+      status: "completed" | "failed" | "stopped";
+      output_file: string;
+      summary: string;
+    },
+    sessionId: string,
+  ): Promise<void> {
+    // Update the subagent tracker
+    await this.subagentTracker.handleTaskNotification({
+      task_id: message.task_id,
+      status: message.status,
+      output_file: message.output_file,
+      summary: message.summary,
+    });
+
+
   }
 
   async unstable_setSessionModel(
@@ -822,7 +892,8 @@ export class ClaudeAcpAgent implements Agent {
 
     // Only add the acp MCP server if built-in tools are not disabled
     if (!params._meta?.disableBuiltInTools) {
-      const server = createMcpServer(this, sessionId, this.clientCapabilities);
+
+      const server = createMcpServer(this, sessionId, this.clientCapabilities, this.taskStore);
       mcpServers["acp"] = {
         type: "sdk",
         name: "acp",
@@ -859,12 +930,22 @@ export class ClaudeAcpAgent implements Agent {
       ? parseInt(process.env.MAX_THINKING_TOKENS, 10)
       : undefined;
 
+    // Build env with task list ID if configured
+    const sdkEnv: Record<string, string | undefined> = {
+      ...userProvidedOptions?.env,
+    };
+    if (this.taskListId) {
+      sdkEnv.CLAUDE_CODE_TASK_LIST_ID = this.taskListId;
+    }
+
     const options: Options = {
       systemPrompt,
       settingSources: ["user", "project", "local"],
       stderr: (err) => this.logger.error(err),
       ...(maxThinkingTokens !== undefined && { maxThinkingTokens }),
       ...userProvidedOptions,
+      // Pass task list ID to SDK so Claude's internal tools share our task list
+      ...(Object.keys(sdkEnv).length > 0 && { env: sdkEnv }),
       // Override certain fields that must be controlled by ACP
       cwd: params.cwd,
       includePartialMessages: true,

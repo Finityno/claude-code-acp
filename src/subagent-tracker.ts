@@ -1,5 +1,6 @@
 import { SessionNotification, AgentSideConnection } from "@agentclientprotocol/sdk";
 import { Logger } from "./acp-agent.js";
+import { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 
 /**
  * Subagent status lifecycle
@@ -9,7 +10,8 @@ export type SubagentStatus =
   | "running" // Currently executing
   | "completed" // Finished successfully
   | "failed" // Finished with error
-  | "cancelled"; // Interrupted by user
+  | "cancelled" // Interrupted by user
+  | "stopped"; // Stopped by SDK (background task)
 
 /**
  * Subagent type from Claude Code Task tool
@@ -74,6 +76,29 @@ export interface TrackedSubagent {
 
   /** Agent ID returned by Claude Code (for resume capability) */
   agentId?: string;
+
+  // SDK 0.2.17 new fields
+
+  /** Output file path for background tasks (from SDK task_notification) */
+  outputFile?: string;
+
+  /** Summary of task result (from SDK task_notification) */
+  summary?: string;
+
+  /** Name given to the spawned agent */
+  agentName?: string;
+
+  /** Team name if spawned as teammate */
+  teamName?: string;
+
+  /** Permission mode used for this task */
+  permissionMode?: PermissionMode;
+
+  /** Whether this task was resumed from a previous execution */
+  isResumed?: boolean;
+
+  /** Original task ID if this is a resumed task */
+  originalTaskId?: string;
 }
 
 /**
@@ -84,12 +109,14 @@ export type SubagentEventType =
   | "subagent_progress"
   | "subagent_completed"
   | "subagent_failed"
-  | "subagent_cancelled";
+  | "subagent_cancelled"
+  | "subagent_stopped";
 
 /**
  * Metadata for subagent-related notifications
  */
 export interface SubagentUpdateMeta {
+  [key: string]: unknown;
   claudeCode?: {
     subagent: {
       id: string;
@@ -104,6 +131,17 @@ export interface SubagentUpdateMeta {
       agentId?: string;
       /** Duration in milliseconds (for completed/failed events) */
       durationMs?: number;
+      /** Output file for background tasks */
+      outputFile?: string;
+      /** Summary from SDK task notification */
+      summary?: string;
+    };
+    /** Task notification from SDK (for background tasks) */
+    taskNotification?: {
+      taskId: string;
+      status: "completed" | "failed" | "stopped";
+      outputFile: string;
+      summary: string;
     };
   };
 }
@@ -118,7 +156,14 @@ export interface TaskToolInput {
   model?: "sonnet" | "opus" | "haiku";
   max_turns?: number;
   run_in_background?: boolean;
+  /** Agent ID to resume from (SDK 0.2.17) */
   resume?: string;
+  /** Name for spawned agent (SDK 0.2.17) */
+  name?: string;
+  /** Team name for spawning (SDK 0.2.17) */
+  team_name?: string;
+  /** Permission mode for spawned teammate (SDK 0.2.17) */
+  mode?: PermissionMode;
 }
 
 // Type definitions for event listeners
@@ -134,8 +179,54 @@ export interface SubagentStats {
   completed: number;
   failed: number;
   cancelled: number;
+  stopped: number;
   byType: Record<string, number>;
   averageDurationMs?: number;
+}
+
+/**
+ * Serializable state for task persistence
+ */
+export interface SerializedTrackerState {
+  version: number;
+  tasks: SerializedTask[];
+  lastUpdated: number;
+}
+
+export interface SerializedTask {
+  id: string;
+  parentSessionId: string;
+  parentToolUseId?: string;
+  subagentType: string;
+  description: string;
+  prompt: string;
+  model?: string;
+  status: SubagentStatus;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  result?: unknown;
+  error?: string;
+  runInBackground: boolean;
+  maxTurns?: number;
+  agentId?: string;
+  outputFile?: string;
+  summary?: string;
+  agentName?: string;
+  teamName?: string;
+  permissionMode?: string;
+  isResumed?: boolean;
+  originalTaskId?: string;
+}
+
+/**
+ * SDK Task Notification from SDKTaskNotificationMessage
+ */
+export interface SDKTaskNotification {
+  task_id: string;
+  status: "completed" | "failed" | "stopped";
+  output_file: string;
+  summary: string;
 }
 
 /**
@@ -147,6 +238,9 @@ export class SubagentTracker {
 
   /** Map of session ID to subagent IDs in that session */
   private sessionSubagents: Map<string, Set<string>> = new Map();
+
+  /** Map of agent ID to subagent ID (for resume lookups) */
+  private agentIdToSubagent: Map<string, string> = new Map();
 
   /** Event listeners for subagent lifecycle events */
   private listeners: Map<SubagentEventType, Set<SubagentEventListener>> = new Map();
@@ -168,6 +262,12 @@ export class SubagentTracker {
     input: TaskToolInput,
     parentToolUseId?: string,
   ): TrackedSubagent {
+    // Check if this is a resume operation
+    const isResumed = !!input.resume;
+    const originalTaskId = input.resume
+      ? this.agentIdToSubagent.get(input.resume)
+      : undefined;
+
     const subagent: TrackedSubagent = {
       id: toolUseId,
       parentSessionId: sessionId,
@@ -180,6 +280,12 @@ export class SubagentTracker {
       createdAt: Date.now(),
       runInBackground: input.run_in_background ?? false,
       maxTurns: input.max_turns,
+      // SDK 0.2.17 fields
+      agentName: input.name,
+      teamName: input.team_name,
+      permissionMode: input.mode,
+      isResumed,
+      originalTaskId,
     };
 
     this.subagents.set(toolUseId, subagent);
@@ -189,10 +295,6 @@ export class SubagentTracker {
       this.sessionSubagents.set(sessionId, new Set());
     }
     this.sessionSubagents.get(sessionId)!.add(toolUseId);
-
-    this.logger.log(
-      `[SubagentTracker] Tracked new subagent: ${toolUseId} (${input.subagent_type}: ${input.description})`,
-    );
 
     return subagent;
   }
@@ -229,14 +331,12 @@ export class SubagentTracker {
     subagent.result = result;
     if (agentId) {
       subagent.agentId = agentId;
+      // Track agent ID for resume lookups
+      this.agentIdToSubagent.set(agentId, toolUseId);
     }
 
     await this.emitEvent("subagent_completed", subagent);
     await this.sendSubagentNotification(subagent, "subagent_completed");
-
-    this.logger.log(
-      `[SubagentTracker] Subagent completed: ${toolUseId} (duration: ${this.getDuration(subagent)}ms)`,
-    );
   }
 
   /**
@@ -273,8 +373,44 @@ export class SubagentTracker {
 
     await this.emitEvent("subagent_cancelled", subagent);
     await this.sendSubagentNotification(subagent, "subagent_cancelled");
+  }
 
-    this.logger.log(`[SubagentTracker] Subagent cancelled: ${toolUseId}`);
+  /**
+   * Handle SDKTaskNotificationMessage from the Claude Agent SDK.
+   * This is called when a background task completes/fails/stops.
+   */
+  async handleTaskNotification(notification: SDKTaskNotification): Promise<void> {
+    const subagent = this.subagents.get(notification.task_id);
+    if (!subagent) {
+      this.logger.error(
+        `[SubagentTracker] Received task notification for unknown subagent: ${notification.task_id}`,
+      );
+      return;
+    }
+
+    // Update subagent with notification data
+    subagent.outputFile = notification.output_file;
+    subagent.summary = notification.summary;
+    subagent.completedAt = Date.now();
+
+    // Map SDK status to our status
+    switch (notification.status) {
+      case "completed":
+        subagent.status = "completed";
+        await this.emitEvent("subagent_completed", subagent);
+        await this.sendSubagentNotification(subagent, "subagent_completed", notification);
+        break;
+      case "failed":
+        subagent.status = "failed";
+        await this.emitEvent("subagent_failed", subagent);
+        await this.sendSubagentNotification(subagent, "subagent_failed", notification);
+        break;
+      case "stopped":
+        subagent.status = "stopped";
+        await this.emitEvent("subagent_stopped", subagent);
+        await this.sendSubagentNotification(subagent, "subagent_stopped", notification);
+        break;
+    }
   }
 
   /**
@@ -346,6 +482,26 @@ export class SubagentTracker {
   }
 
   /**
+   * Find a subagent by its agent ID (for resume operations)
+   */
+  findByAgentId(agentId: string): TrackedSubagent | undefined {
+    const subagentId = this.agentIdToSubagent.get(agentId);
+    if (!subagentId) return undefined;
+    return this.subagents.get(subagentId);
+  }
+
+  /**
+   * Get tasks that can be resumed (have agentId and are completed/failed/stopped)
+   */
+  getResumableTasks(): TrackedSubagent[] {
+    return Array.from(this.subagents.values()).filter(
+      (s) =>
+        s.agentId &&
+        (s.status === "completed" || s.status === "failed" || s.status === "stopped"),
+    );
+  }
+
+  /**
    * Check if a tool use ID is a Task tool (subagent)
    */
   isSubagent(toolUseId: string): boolean {
@@ -380,17 +536,109 @@ export class SubagentTracker {
       if (
         (subagent.status === "completed" ||
           subagent.status === "failed" ||
-          subagent.status === "cancelled") &&
+          subagent.status === "cancelled" ||
+          subagent.status === "stopped") &&
         subagent.completedAt &&
         now - subagent.completedAt > maxAgeMs
       ) {
         this.subagents.delete(id);
         this.sessionSubagents.get(subagent.parentSessionId)?.delete(id);
+        if (subagent.agentId) {
+          this.agentIdToSubagent.delete(subagent.agentId);
+        }
         cleanedCount++;
       }
     }
 
     return cleanedCount;
+  }
+
+  /**
+   * Export current state for persistence
+   */
+  exportState(): SerializedTrackerState {
+    const tasks: SerializedTask[] = Array.from(this.subagents.values()).map((s) => ({
+      id: s.id,
+      parentSessionId: s.parentSessionId,
+      parentToolUseId: s.parentToolUseId,
+      subagentType: s.subagentType,
+      description: s.description,
+      prompt: s.prompt,
+      model: s.model,
+      status: s.status,
+      createdAt: s.createdAt,
+      startedAt: s.startedAt,
+      completedAt: s.completedAt,
+      result: s.result,
+      error: s.error,
+      runInBackground: s.runInBackground,
+      maxTurns: s.maxTurns,
+      agentId: s.agentId,
+      outputFile: s.outputFile,
+      summary: s.summary,
+      agentName: s.agentName,
+      teamName: s.teamName,
+      permissionMode: s.permissionMode,
+      isResumed: s.isResumed,
+      originalTaskId: s.originalTaskId,
+    }));
+
+    return {
+      version: 1,
+      tasks,
+      lastUpdated: Date.now(),
+    };
+  }
+
+  /**
+   * Import state from persistence
+   */
+  importState(state: SerializedTrackerState): void {
+    if (state.version !== 1) {
+      this.logger.error(`[SubagentTracker] Unknown state version: ${state.version}`);
+      return;
+    }
+
+    for (const task of state.tasks) {
+      const subagent: TrackedSubagent = {
+        id: task.id,
+        parentSessionId: task.parentSessionId,
+        parentToolUseId: task.parentToolUseId,
+        subagentType: task.subagentType as SubagentType,
+        description: task.description,
+        prompt: task.prompt,
+        model: task.model as TrackedSubagent["model"],
+        status: task.status,
+        createdAt: task.createdAt,
+        startedAt: task.startedAt,
+        completedAt: task.completedAt,
+        result: task.result,
+        error: task.error,
+        runInBackground: task.runInBackground,
+        maxTurns: task.maxTurns,
+        agentId: task.agentId,
+        outputFile: task.outputFile,
+        summary: task.summary,
+        agentName: task.agentName,
+        teamName: task.teamName,
+        permissionMode: task.permissionMode as PermissionMode | undefined,
+        isResumed: task.isResumed,
+        originalTaskId: task.originalTaskId,
+      };
+
+      this.subagents.set(task.id, subagent);
+
+      // Rebuild session index
+      if (!this.sessionSubagents.has(task.parentSessionId)) {
+        this.sessionSubagents.set(task.parentSessionId, new Set());
+      }
+      this.sessionSubagents.get(task.parentSessionId)!.add(task.id);
+
+      // Rebuild agent ID index
+      if (task.agentId) {
+        this.agentIdToSubagent.set(task.agentId, task.id);
+      }
+    }
   }
 
   /**
@@ -405,6 +653,7 @@ export class SubagentTracker {
       completed: subagents.filter((s) => s.status === "completed").length,
       failed: subagents.filter((s) => s.status === "failed").length,
       cancelled: subagents.filter((s) => s.status === "cancelled").length,
+      stopped: subagents.filter((s) => s.status === "stopped").length,
       byType: this.countByType(subagents),
       averageDurationMs: this.calculateAverageDuration(subagents),
     };
@@ -416,6 +665,7 @@ export class SubagentTracker {
   clear(): void {
     this.subagents.clear();
     this.sessionSubagents.clear();
+    this.agentIdToSubagent.clear();
   }
 
   // Private helper methods
@@ -440,31 +690,46 @@ export class SubagentTracker {
   private async sendSubagentNotification(
     subagent: TrackedSubagent,
     eventType: SubagentEventType,
+    taskNotification?: SDKTaskNotification,
   ): Promise<void> {
     if (!this.client) return;
+
+    const meta: SubagentUpdateMeta = {
+      claudeCode: {
+        subagent: {
+          id: subagent.id,
+          eventType,
+          subagentType: subagent.subagentType,
+          description: subagent.description,
+          status: subagent.status,
+          parentSessionId: subagent.parentSessionId,
+          parentToolUseId: subagent.parentToolUseId,
+          model: subagent.model,
+          runInBackground: subagent.runInBackground,
+          agentId: subagent.agentId,
+          durationMs: this.getDuration(subagent),
+          outputFile: subagent.outputFile,
+          summary: subagent.summary,
+        },
+      },
+    };
+
+    // Include task notification data if available
+    if (taskNotification) {
+      meta.claudeCode!.taskNotification = {
+        taskId: taskNotification.task_id,
+        status: taskNotification.status,
+        outputFile: taskNotification.output_file,
+        summary: taskNotification.summary,
+      };
+    }
 
     const notification: SessionNotification = {
       sessionId: subagent.parentSessionId,
       update: {
         sessionUpdate: "tool_call_update",
         toolCallId: subagent.id,
-        _meta: {
-          claudeCode: {
-            subagent: {
-              id: subagent.id,
-              eventType,
-              subagentType: subagent.subagentType,
-              description: subagent.description,
-              status: subagent.status,
-              parentSessionId: subagent.parentSessionId,
-              parentToolUseId: subagent.parentToolUseId,
-              model: subagent.model,
-              runInBackground: subagent.runInBackground,
-              agentId: subagent.agentId,
-              durationMs: this.getDuration(subagent),
-            },
-          },
-        } satisfies SubagentUpdateMeta,
+        _meta: meta,
       },
     };
 
@@ -488,7 +753,9 @@ export class SubagentTracker {
   private calculateAverageDuration(subagents: TrackedSubagent[]): number | undefined {
     const completed = subagents.filter(
       (s) =>
-        (s.status === "completed" || s.status === "failed") && s.startedAt && s.completedAt,
+        (s.status === "completed" || s.status === "failed" || s.status === "stopped") &&
+        s.startedAt &&
+        s.completedAt,
     );
     if (completed.length === 0) return undefined;
 
