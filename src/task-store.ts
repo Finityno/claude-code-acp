@@ -312,8 +312,12 @@ export class TaskStore {
         if (!filename?.endsWith(".json")) return;
 
         if (this.onChange) {
-          const tasks = await this.list();
-          this.onChange(tasks);
+          try {
+            const tasks = await this.list();
+            this.onChange(tasks);
+          } catch (err) {
+            this.logger.error(`[TaskStore] Error refreshing tasks:`, err);
+          }
         }
       });
     } catch (err) {

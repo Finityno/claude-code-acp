@@ -707,12 +707,9 @@ In sessions with ${acpToolNames.killShell} always use it instead of KillShell.`,
   // Register work item task tools (TaskCreate, TaskGet, TaskUpdate, TaskList)
   // Note: taskStore should always be provided now (auto-generated if not set via env)
   if (taskStore) {
-    console.log("[MCP] Registering work item task tools (TaskCreate, TaskGet, TaskUpdate, TaskList)");
     registerWorkItemMcpTools(server, {
       taskStore,
     });
-  } else {
-    console.warn("[MCP] taskStore not provided - work item task tools will not be available");
   }
 
   return server;
